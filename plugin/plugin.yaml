@@ -1,0 +1,11 @@
+name: ram-first-context
+version: 0.1.1
+description: "RAM-first context memory plugin — FTS recall tool over live Mnemosyne DB (read-only)."
+provides_tools:
+  - mnemosyne_fts_recall
+provides_hooks: []
+author: ether-btc
+license: MIT
+homepage: https://github.com/ether-btc/ram-first-context
+requires_hermes: ">=0.19"
+tags: [memory, mnemosyne, fts5, read-only]

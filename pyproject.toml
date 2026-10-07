@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ram-first-context"
+version = "0.1.1"
+description = "RAM-first context memory plugin for Hermes Agent - read-only FTS5 recall tool over the live Mnemosyne database"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "ether-btc" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+# No runtime dependencies: the plugin uses the Python stdlib only
+# (sqlite3, json, logging, pathlib). Hermes Agent itself is the host runtime.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.urls]
+Homepage = "https://github.com/ether-btc/ram-first-context"
+
+[project.entry-points."hermes_agent.plugins"]
+# Path B (pip install) of the README. The directory-copy path (Path A) never
+# installs this; it is discovered from ~/.hermes/plugins/ by directory scan.
+ram-first-context = "plugin.src.ram_first_tool:register"
+
+# Ship the live-install layout exactly: a directory named `plugin/` containing
+# __init__.py, plugin.yaml, and src/ram_first_tool.py. setuptools-packages-find
+# picks up `plugin` and `plugin.src` as packages; plugin.yaml is a non-Python
+# file and is declared as package data so the wheel carries it.
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"plugin" = ["plugin.yaml"]
+
+[tool.setuptools.packages.find]
+include = ["plugin*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# importlib import mode: pytest must not prepend the repo root to sys.path,
+# because the root contains a `plugin/__init__.py` (the live-install root)
+# whose relative import only resolves inside Hermes's loader context.
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

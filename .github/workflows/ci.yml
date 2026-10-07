@@ -1,0 +1,52 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "ruff>=0.5"
+      - run: ruff check plugin/src tests
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "pytest>=7"
+      - run: pytest -q
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build
+      - run: python -m build --wheel --outdir dist/
+      - name: verify entry point + shipped layout
+        run: |
+          pip install dist/*.wheel
+          python -c "
+          import importlib.metadata, pathlib
+          eps = importlib.metadata.entry_points()
+          group = eps.select(group='hermes_agent.plugins') if hasattr(eps,'select') else eps.get('hermes_agent.plugins', [])
+          ours = [ep for ep in group if ep.name == 'ram-first-context']
+          assert ours, 'entry point ram-first-context missing'
+          mod_name, _, attr = ours[0].value.partition(':')
+          assert attr == 'register'
+          import importlib
+          m = importlib.import_module(mod_name)
+          assert callable(getattr(m,'register',None))
+          pkg = pathlib.Path(m.__file__).parent.parent  # plugin/src -> plugin root
+          assert (pkg/'plugin.yaml').is_file()
+          assert (pkg/'src'/'ram_first_tool.py').is_file()
+          print('OK:', ours[0].value, '| pkg:', pkg)
+          "
