@@ -23,12 +23,20 @@ property of the construction, not a promise.
 - **Prefix search**: a trailing `*` searches a word prefix (`terminal*` →
   `terminal`, `terminals`).
 - **Ranked**: FTS5 `bm25` rank via the `fts_working` index.
-- **Fallback**: if the FTS index is missing or the FTS path throws, the tool
-  degrades to a `LIKE` search ordered by `importance` then `timestamp`
-  (rank reported as `0`), so recall keeps working on a fresh or corrupt
-  database.
-- **Fail-closed envelope**: every result — including errors — is a JSON array
-  (e.g. `[{"error": "Live DB not found at …"}]`), never an exception.
+- **Fallback**: if the FTS index is missing or the FTS path throws (including a
+  corrupt or truncated DB file), the tool degrades to a `LIKE` search ordered
+  by `importance` then `timestamp` (rank reported as `0`), so recall keeps
+  working on a fresh or corrupt database. The fallback treats `%`, `_`, and
+  `\` in the query as **literal** characters (`LIKE … ESCAPE '\'`), matching
+  the FTS path's literal-keyword contract. One deliberate difference: the
+  trailing-`*` prefix marker is FTS-path-only — a `*` in a term is stripped on
+  the fallback, where prefix matching has no `LIKE` equivalent (documented,
+  not a bug).
+- **Fail-closed envelope**: every return value — including errors and a corrupt
+  database — is a JSON array (e.g. `[{"error": "Live DB not found at …"}]`),
+  never an exception. Non-`str` `query` or non-`int` `limit` arguments return
+  an error envelope rather than raising, so the contract holds on direct
+  module calls, not just the schema-validated tool path.
 
 ### Result shape
 
@@ -116,7 +124,7 @@ plugin/
 tests/                   # behavioural contract suite (pytest, no network, no live DB)
 pyproject.toml           # packaging + ruff/pytest config + entry-point declaration
 MANIFEST.in              # ensures plugin.yaml ships in the wheel
-.github/workflows/ci     # lint, test, and wheel-build gates
+.github/workflows/ci.yml   # lint, test, and wheel-build gates
 ```
 
 The `plugin/` directory is the exact live-install layout: copied verbatim into
@@ -134,7 +142,7 @@ three-file live install in sync with `plugin/src/ram_first_tool.py` here
 
 ```bash
 pip install -e .[dev]   # or: pip install pytest ruff
-ruff check src/ tests/
+ruff check plugin/src tests
 pytest -q
 ```
 
@@ -149,9 +157,17 @@ invariants it pins:
 | I3 | No pathological input (`"unterminated`, `NEAR:`, `**`, `"`, …) escapes `fts_recall()` |
 | P1 | Trailing `*` is a prefix, not an exact-word search |
 | F1 | Missing/corrupt `fts_working` → clean LIKE fallback, importance-ordered, rank 0 |
+| H1 | A corrupt/truncated DB file (a `DatabaseError`) stays inside the fail-closed error envelope — no exception escapes `fts_recall()` |
+| H2 | Non-`str` `query` / non-`int` `limit` return an error envelope, not a raised exception (bool rejected; `None` limit → default 5) |
+| M1 | The LIKE fallback treats `%`, `_`, `\` in the query as literal data (`LIKE … ESCAPE`), matching the FTS path's literal-keyword contract |
 | R1 | A successful query never changes a byte of the DB file (SHA-256 pre/post) |
 | T1 | Telemetry is append-only `{ts, q_len, hits}` JSONL; a broken sink never breaks recall |
 | C1 | `register()` hands the loader exactly the manifest-declared tool |
+
+`I2` is intentionally absent: during the 2026-10-07 audit it ("punctuation must not
+trigger a silent LIKE fallback with rank 0") was merged into `I1`, so the
+numbering skips it. The identifiers are kept stable so they remain
+traceable to the audit record, not renumbered.
 
 The live install in this author's Hermes home stays a plain directory
 (deliberately not a git checkout); this repository is its clean, documented

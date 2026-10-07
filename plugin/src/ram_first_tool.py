@@ -35,17 +35,49 @@ def _fts_quote_term(t: str) -> str:
     return '"' + t.strip().replace('"', '""') + '"'
 
 
+def _like_escape(term: str) -> str:
+    """Escape SQL LIKE wildcards so the fallback path matches user text literally.
+
+    Mirrors the FTS path's literal-keyword contract: '%'/'_' (and a stray
+    backslash) in the query are data, not wildcards. The caller strips the
+    trailing '*' prefix marker before calling — LIKE has no prefix operator.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _err_envelope(msg: str) -> str:
+    """Fail-closed error envelope: a JSON array holding one error record."""
+    return json.dumps([{"error": msg}])
+
+
 def fts_recall(query: str, limit: int = 5) -> str:
     """Search live Mnemosyne FTS5 index (read-only).
 
+    Fail-closed by contract: every return value — including error paths — is a
+    JSON array. No exception escapes this function.
+
     Args:
-        query: Search terms (space-separated, AND logic; each term is matched as a literal keyword — FTS5 operators are not interpreted; a trailing * is a prefix).
-        limit: Max results (default 5)
+        query: Search terms (space-separated, AND logic; each term is matched as
+               a literal keyword — FTS5 operators are not interpreted; a trailing
+               * is a prefix).
+        limit: Max results (default 5).
+
     Returns:
-        JSON string of results: id, content, source, importance, timestamp, rank
+        JSON string of results: id, content, source, importance, timestamp, rank.
     """
+    # Type validation at the boundary. The tool schema declares str/int, and the
+    # live Hermes path JSON-schema-validates args before dispatch; but direct
+    # module calls (tests, __main__, ad-hoc use) may pass anything. Fail closed
+    # instead of raising, so the "never an exception" contract holds everywhere.
+    if not isinstance(query, str):
+        return _err_envelope(f"query must be a string, got {type(query).__name__}")
+    if limit is None:
+        limit = 5
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return _err_envelope(f"limit must be an integer, got {type(limit).__name__}")
+
     if not LIVE_DB.exists():
-        return json.dumps([{"error": f"Live DB not found at {LIVE_DB}"}])
+        return _err_envelope(f"Live DB not found at {LIVE_DB}")
 
     raw_terms = [t for t in query.split() if t.strip()]
     if not raw_terms:
@@ -74,8 +106,14 @@ def fts_recall(query: str, limit: int = 5) -> str:
         _log_usage(query, len(rows))
         return json.dumps([dict(row) for row in rows])
 
-    except sqlite3.OperationalError:
-        like = "%" + "%".join(raw_terms) + "%"
+    except sqlite3.Error:
+        # Any sqlite failure on the FTS path degrades to the LIKE fallback so a
+        # bad index or file never breaks recall. This covers a missing
+        # fts_working index (OperationalError) AND a corrupt/truncated DB file
+        # (DatabaseError, "file is not a database"). If the file itself is
+        # unreadable, the LIKE path below fails cleanly into the error envelope.
+        like_terms = [_like_escape(t.rstrip('*')) for t in raw_terms]
+        like = "%" + "%".join(like_terms) + "%"
         try:
             con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
             try:
@@ -84,7 +122,7 @@ def fts_recall(query: str, limit: int = 5) -> str:
                     """
                     SELECT id, content, source, importance, timestamp, memory_type, metadata_json, 0 as rank
                     FROM working_memory
-                    WHERE content LIKE ?
+                    WHERE content LIKE ? ESCAPE '\\'
                     ORDER BY importance DESC, timestamp DESC
                     LIMIT ?
                     """,
@@ -95,7 +133,7 @@ def fts_recall(query: str, limit: int = 5) -> str:
             _log_usage(query, len(rows))
             return json.dumps([dict(row) for row in rows])
         except sqlite3.Error as e:
-            return json.dumps([{"error": f"FTS fallback failed: {e}"}])
+            return _err_envelope(f"FTS fallback failed: {e}")
 
 
 def register(ctx):

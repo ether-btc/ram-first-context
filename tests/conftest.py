@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -94,9 +93,4 @@ def tool_module_no_db(tmp_path: Path) -> object:
     return mod
 
 
-def query_rows(mod, query: str, limit: int = 5) -> list:
-    """Parse the tool's JSON envelope; return rows ([]) or the error envelope."""
-    return json.loads(mod.fts_recall(query, limit))
-
-
-__all__ = ["fixture_db", "tool_module", "tool_module_no_db", "query_rows"]
+__all__ = ["fixture_db", "tool_module", "tool_module_no_db"]

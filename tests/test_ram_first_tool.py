@@ -7,6 +7,14 @@ Every test here was derived from a measured invariant of the live module
       (term quoting: `_fts_quote_term` wraps each term as an FTS5 string
       literal; embedded quotes are doubled).
 - I3  no pathological input escapes fts_recall() unhandled.
+- H1  a corrupt DB file (sqlite3.DatabaseError: "file is not a database")
+      stays inside the fail-closed JSON error envelope — no exception
+      escapes fts_recall().
+- H2  boundary type validation: non-str query / non-int limit (including
+      bool) return the error envelope instead of raising; limit=None is an
+      absent arg and falls back to the default 5.
+- M1  the LIKE fallback escapes '%'/'_'/'\' in query terms (ESCAPE clause),
+      so user text matches literally, same contract as the FTS path.
 - P1  a trailing `*` stays a prefix, not an exact word (STEP B fix).
 - F1  when the fts_working index is absent/corrupt, the LIKE fallback keeps
       the tool answering (rank=0, importance/timestamp order).
@@ -138,6 +146,99 @@ def test_like_fallback_when_fts_index_missing(tmp_path, fixture_db):
 
     # a query matching nothing still returns a clean empty list
     assert json.loads(mod.fts_recall("zzz-not-there")) == []
+
+
+# ── H1: corrupt DB stays inside the fail-closed envelope ──────────────────
+
+def test_corrupt_db_returns_error_envelope_not_exception(tool_module):
+    """A corrupt header ('file is not a database') raises sqlite3.DatabaseError,
+    which the FTS path's except sqlite3.Error must contain: no exception may
+    escape fts_recall() — the corrupt DB degrades exactly like a missing index."""
+    import importlib
+    import sys
+
+    bad_db = tool_module.LIVE_DB.parent / "corrupt.db"
+    bad_db.write_bytes(b"this is not a sqlite database" + b"\0" * 4096)
+
+    mod_dir = Path(tool_module.__file__).parent / "rft_corrupt"
+    mod_dir.mkdir(exist_ok=True)
+    target = mod_dir / "ram_first_tool_corrupt.py"
+    target.write_text((SRC / "ram_first_tool.py").read_text())
+    sys.path.insert(0, str(mod_dir))
+    try:
+        mod = importlib.import_module("ram_first_tool_corrupt")
+    finally:
+        sys.path.remove(str(mod_dir))
+    mod.LIVE_DB = bad_db
+    mod.USAGE_LOG = tool_module.USAGE_LOG.parent / "usage-corrupt.jsonl"
+
+    out = mod.fts_recall("hermes")  # must NOT raise
+    assert isinstance(out, str)
+    env = json.loads(out)
+    assert isinstance(env, list) and env and "error" in env[0]
+
+
+# ── H2: boundary type validation (direct-call path) ───────────────────────
+
+def test_non_string_query_returns_error_envelope(tool_module):
+    for bad in (None, 123, ["hermes"], {"q": "hermes"}):
+        env = json.loads(tool_module.fts_recall(bad))
+        assert isinstance(env, list) and "error" in env[0] and "query" in env[0]["error"]
+
+
+def test_bad_limit_types_return_error_envelope(tool_module):
+    for bad in ("two", {}, ["5"]):
+        env = json.loads(tool_module.fts_recall("hermes", bad))
+        assert isinstance(env, list) and "error" in env[0] and "limit" in env[0]["error"]
+    # bool is an int subclass and must not silently count as a limit
+    assert "error" in json.loads(tool_module.fts_recall("hermes", True))[0]
+    # limit=None is an absent arg (the schema default) -> documented fallback to 5
+    assert json.loads(tool_module.fts_recall("hermes", None)) == json.loads(tool_module.fts_recall("hermes", 5))
+
+
+# ── M1: LIKE fallback treats '%'/'_' as literal data ──────────────────────
+
+def test_like_fallback_escapes_wildcards(tmp_path, fixture_db):
+    """On the LIKE path, '%' and '_' in user text must match literally
+    (ESCAPE '\\'), not act as SQL wildcards — mirroring the FTS path's
+    literal-keyword contract. (The '*' prefix marker is LIKE-inexpressible
+    and is documented as FTS-path-only.)"""
+    import importlib
+    import sys
+
+    fb = tmp_path / "no-fts-esc.db"
+    con = sqlite3.connect(fb)
+    con.executescript(
+        """
+        CREATE TABLE working_memory (
+            id TEXT PRIMARY KEY, content TEXT, source TEXT, importance REAL,
+            timestamp TEXT, memory_type TEXT, metadata_json TEXT);
+        INSERT INTO working_memory VALUES
+          ('lit', 'profit_share 100% literal note',   's', 0.9, '2026-01-02T00:00:00', 't', '{}'),
+          ('wild', 'profitXshare 100Xpercent note',   's', 0.7, '2026-01-04T00:00:00', 't', '{}');
+        """
+    )
+    con.commit()
+    con.close()
+
+    mod_dir = tmp_path / "rft_esc"
+    mod_dir.mkdir()
+    mod_dir.joinpath("ram_first_tool_esc.py").write_text((SRC / "ram_first_tool.py").read_text())
+    sys.path.insert(0, str(mod_dir))
+    try:
+        mod = importlib.import_module("ram_first_tool_esc")
+    finally:
+        sys.path.remove(str(mod_dir))
+    mod.LIVE_DB = fb
+    mod.USAGE_LOG = tmp_path / "usage-esc.jsonl"
+
+    # no fts_working table -> LIKE fallback; '%' and '_' must be data:
+    # 'profit_share' matches only the literal row, not 'profitXshare'
+    ids = [r["id"] for r in json.loads(mod.fts_recall("profit_share"))]
+    assert ids == ["lit"]
+    # '100%' must not become the wildcard '100%'
+    ids = [r["id"] for r in json.loads(mod.fts_recall("100%"))]
+    assert ids == ["lit"]
 
 
 # ── R1: read-only by construction ─────────────────────────────────────────
