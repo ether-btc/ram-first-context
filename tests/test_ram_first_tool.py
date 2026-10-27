@@ -260,7 +260,9 @@ def test_missing_db_returns_structured_error(tool_module_no_db):
 # ── T1: telemetry contract ─────────────────────────────────────────────────
 
 def test_telemetry_is_append_only_jsonl_with_contract_shape(tool_module, tmp_path, monkeypatch):
-    # aim at a fresh log; the fixture_db is shared, so re-point USAGE_LOG
+    # aim at a fresh log; the fixture_db is shared, so re-point USAGE_LOG.
+    # Telemetry is opt-in (RAM_FIRST_USAGE_LOG=1) — enable it for this test.
+    monkeypatch.setenv("RAM_FIRST_USAGE_LOG", "1")
     log = tmp_path / "t.jsonl"
     monkeypatch.setattr(tool_module, "USAGE_LOG", log)
 
@@ -282,10 +284,35 @@ def test_broken_telemetry_sink_never_breaks_recall(tool_module, tmp_path, monkey
     tool must still return its rows (log-and-continue)."""
     blocker = tmp_path / "blocker"
     blocker.write_text("i am a file, not a dir")
+    # Telemetry is opt-in — enable so the sink write is actually attempted.
+    monkeypatch.setenv("RAM_FIRST_USAGE_LOG", "1")
     monkeypatch.setattr(tool_module, "USAGE_LOG", blocker / "usage.jsonl")
 
     rows = query_rows(tool_module, "hermes")
     assert [r["id"] for r in rows] == ["id2"]
+
+
+def test_telemetry_is_opt_in_by_default(tool_module, tmp_path, monkeypatch):
+    """With RAM_FIRST_USAGE_LOG unset, a successful recall writes nothing:
+    the log file must not even be created (catalog rule 13: opt-in)."""
+    log = tmp_path / "default-off.jsonl"
+    monkeypatch.setattr(tool_module, "USAGE_LOG", log)
+    monkeypatch.delenv("RAM_FIRST_USAGE_LOG", raising=False)
+
+    rows = query_rows(tool_module, "hermes")
+    assert [r["id"] for r in rows] == ["id2"]
+    assert not log.exists()
+    assert not list(log.parent.glob("*.jsonl")), "no telemetry file of any name may be created"
+
+
+def test_telemetry_only_exact_value_enables(monkeypatch, tool_module, tmp_path):
+    """Only the exact value '1' opts in — '0', '', 'true', 'yes' do not."""
+    log = tmp_path / "strict.jsonl"
+    monkeypatch.setattr(tool_module, "USAGE_LOG", log)
+    for value in ("", "0", "true", "yes", "1 "):
+        monkeypatch.setenv("RAM_FIRST_USAGE_LOG", value)
+        query_rows(tool_module, "hermes")
+        assert not log.exists(), f"value {value!r} must not enable telemetry"
 
 
 # ── C1: register() contract ───────────────────────────────────────────────

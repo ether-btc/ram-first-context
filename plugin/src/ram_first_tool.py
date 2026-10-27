@@ -2,6 +2,7 @@
 """RAM-first context memory provider plugin — registers mnemosyne_fts_recall tool."""
 import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 
@@ -9,17 +10,28 @@ logger = logging.getLogger(__name__)
 
 LIVE_DB = Path.home() / ".hermes/mnemosyne/data/mnemosyne.db"
 
-# Stage-0 telemetry (arbiter ruling 2026-09-05): append-only JSONL counter so the
-# observation window yields the invocation number that decides Stage 1 (A) vs (C)-terminal.
+# Opt-in usage counter (plugin-catalog rule 13: telemetry must be opt-in).
+# Off by default; enabled only when RAM_FIRST_USAGE_LOG=1 is set in the
+# environment. Append-only JSONL, local-only: {ts, q_len, hits} — never the
+# query text, never sent anywhere.
 USAGE_LOG = Path.home() / ".hermes/ram-first/usage.jsonl"
+USAGE_LOG_ENV = "RAM_FIRST_USAGE_LOG"
+
+
+def _usage_opt_in() -> bool:
+    """Telemetry is opt-in: True only when RAM_FIRST_USAGE_LOG=1."""
+    return os.environ.get(USAGE_LOG_ENV, "") == "1"
 
 
 def _log_usage(query: str, hits: int) -> None:
     """Best-effort append; never raises into the tool path.
 
-    Log-and-continue on OSError (logging can't raise into the tool path either;
-    a broken telemetry sink must never break recall).
+    Opt-in via RAM_FIRST_USAGE_LOG=1 — with the flag unset this is a no-op
+    (no file is created, nothing is written). Log-and-continue on OSError
+    (a broken telemetry sink must never break recall).
     """
+    if not _usage_opt_in():
+        return
     try:
         USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
         import time as _t

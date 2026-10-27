@@ -71,6 +71,10 @@ swallowed, it never breaks a recall.
   and its loader health check disables it.
 - Python 3.10+; **zero third-party runtime dependencies** (stdlib only:
   `sqlite3`, `json`, `logging`, `pathlib`).
+- Nothing else. **Telemetry is opt-in and local-only**: with
+  `RAM_FIRST_USAGE_LOG=1` set the tool appends an offline usage counter
+  (`{ts, q_len, hits}` — never the query text, never sent anywhere) to
+  `~/.hermes/ram-first/usage.jsonl`; unset (the default), it writes nothing.
 
 ## Installation
 
@@ -135,8 +139,8 @@ three-file subset (`__init__.py`, `plugin.yaml`, `src/ram_first_tool.py`) —
 `src/__init__.py` is a repo-only marker because Python's namespace-package
 machinery already resolves `src` in the directory-copy path. Keep the
 three-file live install in sync with `plugin/src/ram_first_tool.py` here
-(which is the audited module — the 2026-10-07 audit record is at
-`~/.hermes/handoffs/ram-first-audit-20261007/PROGRESS.md`).
+(where it is the audited module — the 2026-10-07 audit record is not part of
+this repository).
 
 ## Development
 
@@ -161,7 +165,8 @@ invariants it pins:
 | H2 | Non-`str` `query` / non-`int` `limit` return an error envelope, not a raised exception (bool rejected; `None` limit → default 5) |
 | M1 | The LIKE fallback treats `%`, `_`, `\` in the query as literal data (`LIKE … ESCAPE`), matching the FTS path's literal-keyword contract |
 | R1 | A successful query never changes a byte of the DB file (SHA-256 pre/post) |
-| T1 | Telemetry is append-only `{ts, q_len, hits}` JSONL; a broken sink never breaks recall |
+| T1 | Telemetry is opt-in (`RAM_FIRST_USAGE_LOG=1`); when enabled it is append-only `{ts, q_len, hits}` JSONL, and a broken sink never breaks recall |
+| T2 | With the flag unset (default), no log file is created at all |
 | C1 | `register()` hands the loader exactly the manifest-declared tool |
 
 `I2` is intentionally absent: during the 2026-10-07 audit it ("punctuation must not
@@ -171,10 +176,9 @@ traceable to the audit record, not renumbered.
 
 The live install in this author's Hermes home stays a plain directory
 (deliberately not a git checkout); this repository is its clean, documented
-publication. The shipped `src/ram_first_tool.py` is the audited module — the
-reconstructed diff of the audit session lives at
-`projects/ram-first-audit-2026-09-05` (private) and in the wiki filing
-`projects/ram-first-fts-recall-audit-2026-10-07`.
+publication. The shipped `src/ram_first_tool.py` is the audited module; the
+session-level audit record is not published (it references private session
+data).
 
 ## License
 
