@@ -14,7 +14,10 @@ property of the construction, not a promise.
 ## What the tool does
 
 `mnemosyne_fts_recall(query, limit=5)` searches the `working_memory` table of
-`~/.hermes/mnemosyne/data/mnemosyne.db`:
+the Mnemosyne database in the **active Hermes home** — `<hermes-home>/mnemosyne/data/mnemosyne.db`,
+resolved per call via Hermes's public helper `hermes_constants.get_hermes_home()`
+(so a process serving several profiles reads the calling profile's memory, never
+a path captured at import):
 
 - **AND** semantics: every whitespace-separated term must match.
 - **Literal keywords**: each term is wrapped as an FTS5 string literal, so
@@ -58,23 +61,27 @@ property of the construction, not a promise.
 ### Telemetry
 
 Each call appends one compact JSONL line `{ts, q_len, hits}` to
-`~/.hermes/ram-first/usage.jsonl` (query text is intentionally **not**
+`<hermes-home>/plugin-data/ram-first-context/usage.jsonl` (query text is intentionally **not**
 logged). The write is best-effort: a broken telemetry sink is logged and
 swallowed, it never breaks a recall.
 
 ## Requirements
 
 - Hermes Agent `>= 0.19` (manifest `requires_hermes` gate).
-- A Mnemosyne database at `~/.hermes/mnemosyne/data/mnemosyne.db`
-  (shipped by the `mnemosyne` memory-provider plugin — the one already active
-  in your Hermes home). Without it the tool reports a clean error envelope
-  and its loader health check disables it.
+- A Mnemosyne database at `<hermes-home>/mnemosyne/data/mnemosyne.db`
+  (where `<hermes-home>` is the active Hermes home: the `HERMES_HOME` env var
+  when set, otherwise `~/.hermes`), shipped by the `mnemosyne` memory-provider
+  plugin — the one already active in your Hermes home. Without it the tool
+  reports a clean error envelope and its loader health check disables it.
+  Mnemosyne profile-isolation bank layouts (`mnemosyne/data/banks/<profile>/`)
+  are **not** followed; only the active home's default per-profile database is
+  read.
 - Python 3.10+; **zero third-party runtime dependencies** (stdlib only:
   `sqlite3`, `json`, `logging`, `pathlib`).
 - Nothing else. **Telemetry is opt-in and local-only**: with
   `RAM_FIRST_USAGE_LOG=1` set the tool appends an offline usage counter
   (`{ts, q_len, hits}` — never the query text, never sent anywhere) to
-  `~/.hermes/ram-first/usage.jsonl`; unset (the default), it writes nothing.
+  `<hermes-home>/plugin-data/ram-first-context/usage.jsonl`; unset (the default), it writes nothing.
 
 ## Installation
 

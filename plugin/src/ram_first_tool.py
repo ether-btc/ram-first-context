@@ -8,14 +8,41 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-LIVE_DB = Path.home() / ".hermes/mnemosyne/data/mnemosyne.db"
+# Path seams for unit tests: None is the shipped default. When None, BOTH
+# paths resolve per call from the ACTIVE Hermes home via Hermes's public
+# helper (see _hermes_home) — never at import — so a process serving several
+# profiles reads the calling profile's database. Tests re-aim these module
+# attributes at fixture files; production code never touches them.
+LIVE_DB: Path | None = None
+USAGE_LOG: Path | None = None
+USAGE_LOG_ENV = "RAM_FIRST_USAGE_LOG"
+
+
+def _hermes_home() -> Path:
+    """Active Hermes home, resolved on every call (never at import).
+
+    Delegates to Hermes's public helper, `hermes_constants.get_hermes_home()`,
+    which resolves the context-local override, then the HERMES_HOME env var,
+    then the platform default — so each profile is only served its own DB.
+    """
+    from hermes_constants import get_hermes_home
+    return get_hermes_home()
+
+
+def _live_db() -> Path:
+    """Live Mnemosyne DB — test seam, or the active home's mnemosyne/data/mnemosyne.db."""
+    return LIVE_DB if LIVE_DB is not None else _hermes_home() / "mnemosyne" / "data" / "mnemosyne.db"
+
+
+def _usage_log() -> Path:
+    """Usage log — test seam, or the active home's plugin-data/ram-first-context/usage.jsonl."""
+    return USAGE_LOG if USAGE_LOG is not None else _hermes_home() / "plugin-data" / "ram-first-context" / "usage.jsonl"
+
 
 # Opt-in usage counter (plugin-catalog rule 13: telemetry must be opt-in).
 # Off by default; enabled only when RAM_FIRST_USAGE_LOG=1 is set in the
 # environment. Append-only JSONL, local-only: {ts, q_len, hits} — never the
 # query text, never sent anywhere.
-USAGE_LOG = Path.home() / ".hermes/ram-first/usage.jsonl"
-USAGE_LOG_ENV = "RAM_FIRST_USAGE_LOG"
 
 
 def _usage_opt_in() -> bool:
@@ -33,10 +60,11 @@ def _log_usage(query: str, hits: int) -> None:
     if not _usage_opt_in():
         return
     try:
-        USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        log_path = _usage_log()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         import time as _t
         line = json.dumps({"ts": _t.strftime("%Y-%m-%dT%H:%M:%S"), "q_len": len(query), "hits": hits})
-        with open(USAGE_LOG, "a") as f:
+        with open(log_path, "a") as f:
             f.write(line + "\n")
     except OSError as e:
         logger.warning("ram-first telemetry write failed (continuing): %s", e)
@@ -60,6 +88,11 @@ def _like_escape(term: str) -> str:
 def _err_envelope(msg: str) -> str:
     """Fail-closed error envelope: a JSON array holding one error record."""
     return json.dumps([{"error": msg}])
+
+
+def db_available() -> bool:
+    """Loader-facing health check: the active home's Mnemosyne DB exists (checked per call)."""
+    return _live_db().exists()
 
 
 def fts_recall(query: str, limit: int = 5) -> str:
@@ -88,8 +121,10 @@ def fts_recall(query: str, limit: int = 5) -> str:
     if isinstance(limit, bool) or not isinstance(limit, int):
         return _err_envelope(f"limit must be an integer, got {type(limit).__name__}")
 
-    if not LIVE_DB.exists():
-        return _err_envelope(f"Live DB not found at {LIVE_DB}")
+    # Resolved per call, never cached: each profile serves only its own DB.
+    db = _live_db()
+    if not db.exists():
+        return _err_envelope(f"Live DB not found at {db}")
 
     raw_terms = [t for t in query.split() if t.strip()]
     if not raw_terms:
@@ -98,7 +133,7 @@ def fts_recall(query: str, limit: int = 5) -> str:
     fts_query = " AND ".join((_fts_quote_term(t.rstrip('*')) + '*' if t.endswith('*') else _fts_quote_term(t)) for t in raw_terms)
 
     try:
-        con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
             con.row_factory = sqlite3.Row
             rows = con.execute(
@@ -127,7 +162,7 @@ def fts_recall(query: str, limit: int = 5) -> str:
         like_terms = [_like_escape(t.rstrip('*')) for t in raw_terms]
         like = "%" + "%".join(like_terms) + "%"
         try:
-            con = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True)
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
             try:
                 con.row_factory = sqlite3.Row
                 rows = con.execute(
@@ -176,7 +211,7 @@ def register(ctx):
             query=args.get("query", ""),
             limit=args.get("limit", 5)
         ),
-        check_fn=lambda: LIVE_DB.exists()
+        check_fn=db_available
     )
 
 

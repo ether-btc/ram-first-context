@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ram-first-context"
-version = "0.1.1"
+version = "0.1.3"
 description = "RAM-first context memory plugin for Hermes Agent - read-only FTS5 recall tool over the live Mnemosyne database"
 readme = "README.md"
 license = "MIT"

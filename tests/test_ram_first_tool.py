@@ -337,3 +337,44 @@ def test_register_hands_loader_the_manifest_tool(tool_module):
     out = json.loads(captured["handler"]({"query": "hermes", "limit": 1}))
     assert [r["id"] for r in out] == ["id2"]
     assert tool_module.register.__doc__.startswith("Register mnemosyne_fts_recall")
+    # check_fn is the loader-facing health check, wired straight through
+    assert captured["check_fn"] is tool_module.db_available
+
+
+# ── PRO: paths resolve per call from the ACTIVE Hermes home ───────────────
+
+def test_paths_resolve_per_call_from_active_home(raw_module, tmp_path, monkeypatch):
+    """Profile isolation: with no test seam set, DB and usage log resolve per
+    call from the ACTIVE Hermes home (the HERMES_HOME env var is honored by
+    hermes_constants.get_hermes_home) — never a path captured at import."""
+    plugin_home = tmp_path / "profile-b"
+    monkeypatch.setenv("HERMES_HOME", str(plugin_home))
+
+    db = plugin_home / "mnemosyne" / "data" / "mnemosyne.db"
+    log = plugin_home / "plugin-data" / "ram-first-context" / "usage.jsonl"
+
+    assert raw_module._live_db() == db
+    assert raw_module._usage_log() == log
+    assert raw_module.db_available() is False, "no DB under the active home yet"
+
+    out = json.loads(raw_module.fts_recall("hermes"))
+    assert out == [{"error": f"Live DB not found at {db}"}]
+
+    # A DB appearing under this profile flips the health check on the NEXT
+    # call — resolution is per call, not per process.
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"")
+    assert raw_module.db_available() is True
+
+
+def test_standalone_env_without_hermes_home_defaults_to_platform_home(raw_module, monkeypatch, tmp_path):
+    """No HERMES_HOME env var (the common runner case): the platform default
+    (~/.hermes) is what the helper's contract produces — same shape."""
+    import os
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    platform_db = Path.home() / ".hermes" / "mnemosyne" / "data" / "mnemosyne.db"
+    # Never require the developer's real ~/.hermes to exist; shape only.
+    resolved = raw_module._live_db()
+    assert os.environ.get("HERMES_HOME") in (None, "")
+    assert resolved.name == "mnemosyne.db" and resolved.parents[0].name == "data" and resolved.parents[1].name == "mnemosyne"
+    assert resolved == platform_db
