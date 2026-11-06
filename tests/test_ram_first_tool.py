@@ -378,3 +378,62 @@ def test_standalone_env_without_hermes_home_defaults_to_platform_home(raw_module
     assert os.environ.get("HERMES_HOME") in (None, "")
     assert resolved.name == "mnemosyne.db" and resolved.parents[0].name == "data" and resolved.parents[1].name == "mnemosyne"
     assert resolved == platform_db
+
+
+# ── PRO2: profile isolation — read the active profile's Mnemosyne bank ─────
+
+def _bank_db(home: Path, bank: str) -> Path:
+    return home / "mnemosyne" / "data" / "banks" / bank / "mnemosyne.db"
+
+
+def _shared_db(home: Path) -> Path:
+    return home / "mnemosyne" / "data" / "mnemosyne.db"
+
+
+def test_named_profile_reads_its_bank_when_present(raw_module, tmp_path, monkeypatch, build_db):
+    """profile_isolation ON: the tool answers from banks/<profile>/, not the shared DB."""
+    home = tmp_path / "profiles" / "alpha"
+    bank = _bank_db(home, "alpha")
+    build_db(bank)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    assert raw_module._live_db() == bank
+    rows = json.loads(raw_module.fts_recall("hermes"))
+    assert [r["id"] for r in rows] == ["id2"], "the bank's own rows, not the shared DB's"
+
+
+def test_named_profile_without_a_bank_uses_the_shared_db(raw_module, tmp_path, monkeypatch):
+    """profile_isolation OFF (or no bank on disk yet): the shared DB is the answer."""
+    home = tmp_path / "profiles" / "beta"
+    shared = _shared_db(home)
+    shared.parent.mkdir(parents=True)
+    shared.write_bytes(b"")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    assert raw_module._live_db() == shared
+
+
+def test_default_home_never_reads_a_profile_bank(raw_module, tmp_path, monkeypatch, build_db):
+    """Privacy guard: the default home has no bank, even when banks/ exist on disk.
+
+    Reading another profile's bank from the default home would leak that profile's
+    memories into every session served by the default profile.
+    """
+    home = tmp_path / ".hermes"
+    stray = _bank_db(home, "someone-else")
+    build_db(stray)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    assert raw_module._live_db() == _shared_db(home)
+    assert raw_module.db_available() is False, "no shared DB yet — must not answer from a bank"
+
+
+def test_bank_name_mirrors_mnemosyne_sanitizer(raw_module):
+    """The bank directory we look for is the one Mnemosyne would create."""
+    assert raw_module._sanitize_bank("alpha") == "alpha"
+    assert raw_module._sanitize_bank("Tenant A") == "tenant_a"
+    assert raw_module._sanitize_bank("tenant--b") == "tenant--b", "only repeated '_' collapses"
+    assert raw_module._sanitize_bank("_weird_") == "weird"
+    assert raw_module._sanitize_bank("") == "default"
+    assert raw_module._sanitize_bank("../etc") == "etc", "separators become '_' before any traversal check"
+    assert len(raw_module._sanitize_bank("x" * 80)) == 64

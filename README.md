@@ -60,22 +60,25 @@ a path captured at import):
 
 ### Telemetry
 
-Each call appends one compact JSONL line `{ts, q_len, hits}` to
-`<hermes-home>/plugin-data/ram-first-context/usage.jsonl` (query text is intentionally **not**
-logged). The write is best-effort: a broken telemetry sink is logged and
-swallowed, it never breaks a recall.
+Opt-in and local-only: with `RAM_FIRST_USAGE_LOG=1` set, each call appends one compact JSONL
+line `{ts, q_len, hits}` to `<hermes-home>/plugin-data/ram-first-context/usage.jsonl` (query
+text is intentionally **not** logged). Unset (the default), no file is created and nothing is
+written. The write is best-effort: a broken telemetry sink is logged and swallowed, it never
+breaks a recall.
 
 ## Requirements
 
 - Hermes Agent `>= 0.19` (manifest `requires_hermes` gate).
-- A Mnemosyne database at `<hermes-home>/mnemosyne/data/mnemosyne.db`
-  (where `<hermes-home>` is the active Hermes home: the `HERMES_HOME` env var
-  when set, otherwise `~/.hermes`), shipped by the `mnemosyne` memory-provider
-  plugin — the one already active in your Hermes home. Without it the tool
+- A Mnemosyne database, reached in this order on every call (where `<hermes-home>` is the
+  active Hermes home: the `HERMES_HOME` env var when set, otherwise `~/.hermes`):
+  1. `<hermes-home>/mnemosyne/data/banks/<profile>/mnemosyne.db` when the home is a **named
+     profile** and Mnemosyne's `profile_isolation` has created that bank;
+  2. otherwise `<hermes-home>/mnemosyne/data/mnemosyne.db`, the shared database.
+  The bank name is derived exactly as Mnemosyne derives it (the profile name, sanitized), so
+  the tool and the writer agree on the file. The default home (`.hermes`) never reads a bank —
+  banks exist to keep profiles apart, and reading another profile's memories would defeat
+  that. The database is shipped by the `mnemosyne` memory-provider plugin; without it the tool
   reports a clean error envelope and its loader health check disables it.
-  Mnemosyne profile-isolation bank layouts (`mnemosyne/data/banks/<profile>/`)
-  are **not** followed; only the active home's default per-profile database is
-  read.
 - Python 3.10+; **zero third-party runtime dependencies** (stdlib only:
   `sqlite3`, `json`, `logging`, `pathlib`).
 - Nothing else. **Telemetry is opt-in and local-only**: with

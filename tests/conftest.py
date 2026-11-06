@@ -61,6 +61,7 @@ def _load_module_copy(mod_name: str, mod_dir: Path) -> types.ModuleType:
 
 
 def _build_fixture_db(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db_path)
     try:
         con.executescript(
@@ -100,6 +101,12 @@ def fixture_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
     db = tmp_path_factory.mktemp("db") / "mnemosyne.db"
     _build_fixture_db(db)
     return db
+
+
+@pytest.fixture()
+def build_db():
+    """Factory fixture: build a Mnemosyne-shaped DB at any path (bank tests)."""
+    return _build_fixture_db
 
 
 @pytest.fixture()

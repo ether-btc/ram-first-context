@@ -29,9 +29,73 @@ def _hermes_home() -> Path:
     return get_hermes_home()
 
 
+def _sanitize_bank(raw: str) -> str:
+    """Mirror Mnemosyne's bank-name sanitizer so we resolve the same directory it writes.
+
+    Rules (from ``mnemosyne.core.banks`` / the Hermes memory provider): lowercase, only
+    ``[a-z0-9_-]``, disallowed chars become ``_``, collapse repeated ``_``, strip leading and
+    trailing ``_-``, must start alphanumeric, max 64 chars, and anything that still looks like
+    path traversal collapses to ``default``.
+    """
+    if not raw:
+        return "default"
+    out = "".join(c if (c.isalnum() or c in "_-") else "_" for c in raw.lower().strip())
+    while "__" in out:
+        out = out.replace("__", "_")
+    out = out.strip("_-")
+    if not out:
+        return "default"
+    if not out[0].isalnum():
+        out = "b_" + out
+    out = out[:64].rstrip("_-")
+    if ".." in out or "/" in out:
+        return "default"
+    return out
+
+
+def _profile_bank(home: Path) -> str:
+    """The Mnemosyne bank this Hermes home writes to: ``default`` means the shared DB.
+
+    Mnemosyne's ``profile_isolation`` mode derives the bank from the agent identity, else from
+    the Hermes home's basename (``.../profiles/<name>`` → ``<name>``). The default home is not
+    a bank: its basename is an install detail (``.hermes``), so it stays on the shared DB.
+    """
+    name = ""
+    try:
+        from hermes_constants import profile_name_for_home
+        name = profile_name_for_home(home) or ""
+    except Exception:  # noqa: BLE001 - an older/stub host module must not break recall
+        name = ""
+    if not name:
+        name = home.name
+    if name in ("", ".hermes", "hermes", "default"):
+        return "default"
+    return _sanitize_bank(name)
+
+
 def _live_db() -> Path:
-    """Live Mnemosyne DB — test seam, or the active home's mnemosyne/data/mnemosyne.db."""
-    return LIVE_DB if LIVE_DB is not None else _hermes_home() / "mnemosyne" / "data" / "mnemosyne.db"
+    """Live Mnemosyne DB — test seam, else the active profile's bank, else the shared DB.
+
+    Resolution order, per call (never at import):
+      1. ``LIVE_DB`` test seam.
+      2. ``<home>/mnemosyne/data/banks/<bank>/mnemosyne.db`` when the home is a named profile
+         AND that bank exists (Mnemosyne ``profile_isolation`` on).
+      3. ``<home>/mnemosyne/data/mnemosyne.db`` (isolation off, or no bank on disk yet).
+
+    A named profile never falls back to the shared DB once its own bank exists: banks exist to
+    keep profiles apart, and silently reading another profile's memories to get a non-zero
+    result is the one failure mode this tool must not have.
+    """
+    if LIVE_DB is not None:
+        return LIVE_DB
+    home = _hermes_home()
+    data = home / "mnemosyne" / "data"
+    bank = _profile_bank(home)
+    if bank != "default":
+        bank_db = data / "banks" / bank / "mnemosyne.db"
+        if bank_db.exists():
+            return bank_db
+    return data / "mnemosyne.db"
 
 
 def _usage_log() -> Path:
